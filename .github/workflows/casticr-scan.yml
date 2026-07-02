@@ -69,6 +69,7 @@ jobs:
           APP: ${{ matrix.name }}
         run: |
           mkdir -p results
+          chmod 777 results   # the analyzer runs as user 'carl' inside the container and must write here
           # Mirrors your local command:
           #   docker run -v <src>:/home/carl/extras/source \
           #              -v <out>:/home/carl/extras/results \
