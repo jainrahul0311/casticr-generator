@@ -3,9 +3,10 @@
 # =============================================================================
 #  For every project in the matrix below, in its OWN parallel job:
 #    1. clone the repo (shallow)
-#    2. run the CAST Imaging docker analyzer on it
-#    3. find the generated <app>.casticr
-#    4. upload it as a build artifact named after the app
+#    2. restore this app's cached analyzer extensions (reused across runs)
+#    3. run the CAST Imaging docker analyzer on it
+#    4. find the generated <app>.casticr
+#    5. upload it as a build artifact named after the app
 #
 #  Runs every day at 2 PM IST (= 08:30 UTC) and can be started manually.
 #
@@ -15,8 +16,7 @@
 #    - name: the app name passed to the analyzer's -n flag (also the folder
 #            the analyzer creates in results, and the artifact name)
 #
-#  REQUIRED SECRET (repo/org Settings -> Secrets and variables -> Actions):
-#    IMAGING_ANALYSIS_KEY   the analysis key passed to the analyzer's -ak flag
+#  REQUIRED SECRET: IMAGING_ANALYSIS_KEY   (passed to the analyzer's -ak flag)
 #  ---------------------------------------------------------------------------
 # =============================================================================
 
@@ -27,11 +27,9 @@ on:
     - cron: '30 8 * * *'   # 08:30 UTC == 14:00 (2 PM) IST, daily
   workflow_dispatch: {}     # allow manual runs from the Actions tab
 
-# This job only needs to read; it clones public repos over HTTPS.
 permissions:
   contents: read
 
-# Don't let a new daily run pile on top of one that's still going.
 concurrency:
   group: casticr-scan
   cancel-in-progress: false
@@ -63,20 +61,33 @@ jobs:
         run: |
           git clone --depth 1 "$REPO_URL" source
 
+      # Persist the analyzer's downloaded extensions (/home/carl/extras/extensions)
+      # so they're reused on later runs instead of re-downloaded every day.
+      # One cache per app (extensions are technology-specific). To force a fresh
+      # download, bump the "v1" in the key.
+      - name: Restore extensions cache
+        uses: actions/cache@v4
+        with:
+          path: extensions-cache
+          key: casticr-extensions-v1-${{ matrix.name }}
+
       - name: Run CAST Imaging analyzer
         env:
           ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
           APP: ${{ matrix.name }}
         run: |
-          mkdir -p results
-          chmod 777 results   # the analyzer runs as user 'carl' inside the container and must write here
-          # Mirrors your local command:
+          mkdir -p results extensions-cache
+          # The analyzer runs as user 'carl' in the container and must write to both mounts.
+          chmod 777 results extensions-cache
+          # Mirrors your local command, plus the shared extensions mount:
           #   docker run -v <src>:/home/carl/extras/source \
           #              -v <out>:/home/carl/extras/results \
+          #              -v <cache>:/home/carl/extras/extensions \
           #              castimaging/imaging-docker-analyzer:latest -ak <key> -n <app>
           docker run --rm \
             -v "${PWD}/source:/home/carl/extras/source" \
             -v "${PWD}/results:/home/carl/extras/results" \
+            -v "${PWD}/extensions-cache:/home/carl/extras/extensions" \
             -e IMAGING_CLOUD_URL="https://dev.castimaging.io" \
             castimaging/imaging-docker-analyzer:latest \
             -ak "$ANALYSIS_KEY" \
@@ -86,8 +97,9 @@ jobs:
         env:
           APP: ${{ matrix.name }}
         run: |
-          # The container writes as a different user; take ownership so we can read.
-          sudo chown -R "$(id -u):$(id -g)" results || true
+          # The container wrote as a different user; take ownership so we (and the
+          # cache save step) can read results and the extensions cache.
+          sudo chown -R "$(id -u):$(id -g)" results extensions-cache || true
           # Layout: results/<app>/<timestamp>/deep-analysis/<app>.casticr
           # The timestamp folder is dynamic, so find it (newest wins if several).
           casticr="$(find "results/$APP" -type f -name '*.casticr' -printf '%T@ %p\n' 2>/dev/null \
@@ -105,6 +117,6 @@ jobs:
         with:
           name: ${{ matrix.name }}.casticr   # stable name -> same artifact name every day
           path: ${{ env.CASTICR_PATH }}
-          overwrite: true                     # replace a same-named artifact within the run
-          retention-days: 1                   # kept ~1 day; each daily run refreshes it (raise to keep history)
+          overwrite: true
+          retention-days: 1
           if-no-files-found: error
