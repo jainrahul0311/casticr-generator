@@ -40,6 +40,6 @@ gh secret set IMAGING_ANALYSIS_KEY --repo <owner>/casticr-generator
 
 ## Getting the results
 
-Open the latest **Daily .casticr scan** run under the **Actions** tab and
+Open the latest **Scheduled .casticr scan** run under the **Actions** tab and
 download the `<app>.casticr` artifacts. They use a stable name and short
 retention, so each day's run refreshes them.
