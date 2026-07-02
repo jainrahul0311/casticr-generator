@@ -66,7 +66,7 @@ jobs:
       # One cache per app (extensions are technology-specific). To force a fresh
       # download, bump the "v1" in the key.
       - name: Restore extensions cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: extensions-cache
           key: casticr-extensions-v1-${{ matrix.name }}
@@ -113,7 +113,7 @@ jobs:
           echo "CASTICR_PATH=$casticr" >> "$GITHUB_ENV"
 
       - name: Upload ${{ matrix.name }}.casticr
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}.casticr   # stable name -> same artifact name every day
           path: ${{ env.CASTICR_PATH }}
