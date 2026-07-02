@@ -1,5 +1,5 @@
 # =============================================================================
-#  Daily .casticr scan
+#  Scheduled .casticr scan
 # =============================================================================
 #  For every project in the matrix below, in its OWN parallel job:
 #    1. clone the repo (shallow)
@@ -20,7 +20,7 @@
 #  ---------------------------------------------------------------------------
 # =============================================================================
 
-name: Daily .casticr scan
+name: Scheduled .casticr scan
 
 on:
   schedule:
