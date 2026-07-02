@@ -8,7 +8,7 @@
 #    4. find the generated <app>.casticr
 #    5. upload it as a build artifact named after the app
 #
-#  Runs every day at 2 PM IST (= 08:30 UTC) and can be started manually.
+#  Runs at 9 PM IST (= 15:30 UTC), Monday-Friday, and can be started manually.
 #
 #  ---------------------------------------------------------------------------
 #  TO ADD / REMOVE A PROJECT: edit the matrix `include:` list below.
@@ -24,7 +24,7 @@ name: Daily .casticr scan
 
 on:
   schedule:
-    - cron: '30 8 * * *'   # 08:30 UTC == 14:00 (2 PM) IST, daily
+    - cron: '30 15 * * 1-5'   # 15:30 UTC == 21:00 (9 PM) IST, Mon-Fri
   workflow_dispatch: {}     # allow manual runs from the Actions tab
 
 permissions:
@@ -122,5 +122,5 @@ jobs:
           name: ${{ matrix.name }}.casticr   # stable name -> same artifact name every day
           path: ${{ env.CASTICR_PATH }}
           overwrite: true
-          retention-days: 1
+          retention-days: 3
           if-no-files-found: error
