@@ -76,6 +76,7 @@ jobs:
           docker run --rm \
             -v "${PWD}/source:/home/carl/extras/source" \
             -v "${PWD}/results:/home/carl/extras/results" \
+            -e IMAGING_CLOUD_URL="https://dev.castimaging.io" \
             castimaging/imaging-docker-analyzer:latest \
             -ak "$ANALYSIS_KEY" \
             -n "$APP"
