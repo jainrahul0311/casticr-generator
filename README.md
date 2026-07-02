@@ -6,7 +6,7 @@ CAST Imaging, and stores each one as a GitHub Actions artifact.
 ## How it works
 
 [`.github/workflows/casticr-scan.yml`](.github/workflows/casticr-scan.yml) runs
-**daily at 2 PM IST (08:30 UTC)** and can also be started manually. For each
+**at 9 PM IST (15:30 UTC), Monday–Friday** and can also be started manually. For each
 project in the matrix, in its own parallel job, it:
 
 1. clones the repo (shallow),
