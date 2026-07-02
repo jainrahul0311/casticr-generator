@@ -21,10 +21,10 @@ project in the matrix, in its own parallel job, it:
 
 | App name           | Repository |
 | ------------------ | ---------- |
-| `DemoAppPython`    | https://github.com/public-apis/public-apis |
-| `DemoAppMainframe` | https://github.com/aws-samples/aws-mainframe-modernization-carddemo |
-| `DemoAppDOTNET`    | https://github.com/razorpay/razorpay-dotnet-testapp |
-| `DemoAppJEE`       | https://github.com/spring-petclinic/spring-petclinic-microservices |
+| `AppPython`    | https://github.com/public-apis/public-apis |
+| `AppMainframe` | https://github.com/aws-samples/aws-mainframe-modernization-carddemo |
+| `AppDOTNET`    | https://github.com/razorpay/razorpay-dotnet-testapp |
+| `AppJEE`       | https://github.com/spring-petclinic/spring-petclinic-microservices |
 
 To add or remove a project, edit the `matrix.include` list in the workflow —
 each entry is a `url` (public clone URL) and a `name` (the `-n` app name, also
