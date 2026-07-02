@@ -54,8 +54,8 @@ jobs:
             url: https://github.com/spring-petclinic/spring-petclinic-microservices
           - name: eshop-csharp-dotnet
             url: https://github.com/dotnet-architecture/eShopModernizing
-          - name: keycloak-jee
-            url: https://github.com/keycloak/keycloak
+          - name: guava-jee
+            url: https://github.com/google/guava.git
           # ====================================================================
 
     steps:
