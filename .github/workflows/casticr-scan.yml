@@ -44,8 +44,6 @@ jobs:
       matrix:
         include:
           # ===== EDIT THIS LIST (url = public clone URL, name = -n app name) ===
-          - name: public-apis-python
-            url: https://github.com/public-apis/public-apis
           - name: aws-mainframe-mainframe
             url: https://github.com/aws-samples/aws-mainframe-modernization-carddemo
           - name: razorpay-dotnet
@@ -58,6 +56,8 @@ jobs:
             url: https://github.com/google/guava.git
           - name: strix-python
             url: https://github.com/usestrix/strix.git
+          - name: nopCommerce
+            url: https://github.com/nopSolutions/nopCommerce
           # ====================================================================
 
     steps:
