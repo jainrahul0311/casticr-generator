@@ -117,12 +117,16 @@ jobs:
           fi
           echo "Found: $casticr ($(du -h "$casticr" | cut -f1))"
           echo "CASTICR_PATH=$casticr" >> "$GITHUB_ENV"
+          # Zip just that one file (-j = store only the filename, drop its folder path)
+          zip -j -0 "$RUNNER_TEMP/$APP.casticr.zip" "$casticr"
+          echo "CASTICR_ZIP=$RUNNER_TEMP/$APP.casticr.zip" >> "$GITHUB_ENV"
 
       - name: Upload ${{ matrix.name }}.casticr
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}.casticr   # stable name -> same artifact name every day
-          path: ${{ env.CASTICR_PATH }}
+          path: ${{ env.CASTICR_ZIP }}       # upload the zip of the single .casticr
           overwrite: true
           retention-days: 3
           if-no-files-found: error
+          compression-level: 0               # payload is already a .zip
