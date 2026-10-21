@@ -152,7 +152,8 @@ jobs:
             echo "::error::No deep-analysis folder under results/$APP"
             exit 1
           fi
-          (cd "$dir" && zip -r "$GITHUB_WORKSPACE/$APP-deep-analysis.zip" .)
+          parent="$(dirname "$dir")"
+          (cd "$(dirname "$parent")" && zip -r "$GITHUB_WORKSPACE/$APP-deep-analysis.zip" "$(basename "$parent")")
           ls -lh "$GITHUB_WORKSPACE/$APP-deep-analysis.zip"
 
       - name: Upload ${{ matrix.name }}-deep-analysis.zip
