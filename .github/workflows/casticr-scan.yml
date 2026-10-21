@@ -46,7 +46,6 @@ concurrency:
 jobs:
   scan:
     name: scan ${{ matrix.name }}
-    if: ${{ inputs.app == '' || inputs.app == matrix.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false          # one project failing must NOT cancel the others
@@ -72,6 +71,7 @@ jobs:
 
     steps:
       - name: Clone ${{ matrix.name }}
+        if: ${{ inputs.app == '' || inputs.app == matrix.name }}
         env:
           REPO_URL: ${{ matrix.url }}
         run: |
@@ -82,12 +82,14 @@ jobs:
       # One cache per app (extensions are technology-specific). To force a fresh
       # download, bump the "v1" in the key.
       - name: Restore extensions cache
+        if: ${{ inputs.app == '' || inputs.app == matrix.name }}
         uses: actions/cache@v6
         with:
           path: extensions-cache
           key: casticr-extensions-v1-${{ matrix.name }}
 
       - name: Run CAST Imaging analyzer
+        if: ${{ inputs.app == '' || inputs.app == matrix.name }}
         env:
           ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
           APP: ${{ matrix.name }}
@@ -110,6 +112,7 @@ jobs:
             -n "$APP"
 
       - name: Locate the .casticr file
+        if: ${{ inputs.app == '' || inputs.app == matrix.name }}
         env:
           APP: ${{ matrix.name }}
         run: |
@@ -129,6 +132,7 @@ jobs:
           echo "CASTICR_PATH=$casticr" >> "$GITHUB_ENV"
 
       - name: Upload ${{ matrix.name }}.casticr
+        if: ${{ inputs.app == '' || inputs.app == matrix.name }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}.casticr   # stable name -> same artifact name every day
@@ -138,7 +142,7 @@ jobs:
           if-no-files-found: error
 
       - name: Zip deep-analysis folder
-        if: ${{ inputs.upload_deep_analysis }}
+        if: ${{ (inputs.app == '' || inputs.app == matrix.name) && inputs.upload_deep_analysis }}
         env:
           APP: ${{ matrix.name }}
         run: |
@@ -152,7 +156,7 @@ jobs:
           ls -lh "$GITHUB_WORKSPACE/$APP-deep-analysis.zip"
 
       - name: Upload ${{ matrix.name }}-deep-analysis.zip
-        if: ${{ inputs.upload_deep_analysis }}
+        if: ${{ (inputs.app == '' || inputs.app == matrix.name) && inputs.upload_deep_analysis }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}-deep-analysis
