@@ -25,7 +25,12 @@ name: Scheduled .casticr scan
 on:
   schedule:
     - cron: '30 14 * * 1-5'   # 15:30 UTC == 21:00 (9 PM) IST, Mon-Fri
-  workflow_dispatch: {}     # allow manual runs from the Actions tab
+  workflow_dispatch:        # manual runs from the Actions tab
+    inputs:
+      upload_deep_analysis:
+        description: 'Also zip and upload the deep-analysis folder'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -123,6 +128,30 @@ jobs:
         with:
           name: ${{ matrix.name }}.casticr   # stable name -> same artifact name every day
           path: ${{ env.CASTICR_PATH }}      # upload the raw .casticr file directly
+          overwrite: true
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Zip deep-analysis folder
+        if: ${{ inputs.upload_deep_analysis }}
+        env:
+          APP: ${{ matrix.name }}
+        run: |
+          dir="$(find "results/$APP" -type d -name deep-analysis -printf '%T@ %p\n' 2>/dev/null \
+                 | sort -nr | head -n1 | cut -d' ' -f2-)"
+          if [ -z "$dir" ]; then
+            echo "::error::No deep-analysis folder under results/$APP"
+            exit 1
+          fi
+          (cd "$dir" && zip -r "$GITHUB_WORKSPACE/$APP-deep-analysis.zip" .)
+          ls -lh "$GITHUB_WORKSPACE/$APP-deep-analysis.zip"
+
+      - name: Upload ${{ matrix.name }}-deep-analysis.zip
+        if: ${{ inputs.upload_deep_analysis }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}-deep-analysis
+          path: ${{ matrix.name }}-deep-analysis.zip
           overwrite: true
           retention-days: 3
           if-no-files-found: error
