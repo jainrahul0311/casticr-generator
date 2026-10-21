@@ -31,6 +31,10 @@ on:
         description: 'Also zip and upload the deep-analysis folder'
         type: boolean
         default: false
+      app:
+        description: 'Scan only this app (exact name from the matrix; empty = all)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -42,6 +46,7 @@ concurrency:
 jobs:
   scan:
     name: scan ${{ matrix.name }}
+    if: ${{ inputs.app == '' || inputs.app == matrix.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false          # one project failing must NOT cancel the others
