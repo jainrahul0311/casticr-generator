@@ -21,15 +21,15 @@ cancel the rest.
 
 | Analyzer  | Image | Needs |
 | --------- | ----- | ----- |
-| `offline` | `castimaging/imaging-docker-offline-analyzer:2.20.0 -n <app>` (pinned in `casticr-analyze.yml`; there is no `:latest` tag) | nothing |
+| `offline` | `castimaging/imaging-docker-offline-analyzer:<tag> -n <app>` (tag `dev` by default) | nothing |
 | `online`  | `castimaging/imaging-docker-analyzer:latest -ak <key> -n <app>` | `IMAGING_ANALYSIS_KEY` secret, `dev.castimaging.io` |
 
 ### When it runs
 
 | Trigger | Analyzer | Projects |
 | ------- | -------- | -------- |
-| Schedule: 8 PM IST (14:30 UTC), Mon–Fri | `offline` | all |
-| Manual: Actions → **Scheduled .casticr scan** → Run workflow | `online` (default), `offline` or `both` | the name typed in `project`, or all if blank |
+| Schedule: 8 PM IST (14:30 UTC), Mon–Fri | `offline`, tag `dev` | all |
+| Manual: Actions → **Scheduled .casticr scan** → Run workflow | `online` (default), `offline` or `both`; offline tag `dev` (default), `int` or `latest` | the name typed in `project`, or all if blank |
 
 A `project` name that isn't in the list fails the `plan` job immediately and
 prints the valid names.

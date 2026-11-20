@@ -27,6 +27,11 @@ on:
         description: 'JSON array of analyzers, e.g. ["offline","online"]'
         type: string
         required: true
+      offline_tag:
+        description: 'Tag of castimaging/imaging-docker-offline-analyzer (dev, int, latest, ...)'
+        type: string
+        required: false
+        default: dev
     secrets:
       IMAGING_ANALYSIS_KEY:
         description: 'Analysis key for the online analyzer (-ak)'
@@ -44,9 +49,9 @@ jobs:
       matrix:
         analyzer: ${{ fromJSON(inputs.analyzers) }}
     env:
-      # Docker Hub has no :latest tag for the offline analyzer; pin a release.
+      # Tag comes from the caller: dev on schedule, dev/int/latest on manual runs.
       # Tags: https://hub.docker.com/r/castimaging/imaging-docker-offline-analyzer/tags
-      OFFLINE_IMAGE: castimaging/imaging-docker-offline-analyzer:2.20.0
+      OFFLINE_IMAGE: castimaging/imaging-docker-offline-analyzer:${{ inputs.offline_tag }}
       APP: ${{ inputs.app_name }}
       REPO_URL: ${{ inputs.repo_url }}
     steps:
