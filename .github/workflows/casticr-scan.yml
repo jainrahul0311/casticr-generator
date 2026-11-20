@@ -239,10 +239,11 @@ jobs:
           # newly downloaded ones are handed to merge-cache. Files restored from
           # an old per-app cache count as new, so they seed the shared cache.
           if [[ "$MATCHED_KEY" == "$EXT_CACHE_PREFIX"* ]]; then
-            (cd extensions-cache && find . -type f | sort) > "$RUNNER_TEMP/ext-before.txt"
+            (cd extensions-cache && find . -type f | LC_ALL=C sort) > "$RUNNER_TEMP/ext-before.txt"
           else
             : > "$RUNNER_TEMP/ext-before.txt"
           fi
+          echo "Extensions cache: restored key '${MATCHED_KEY:-none}', $(find extensions-cache -type f | wc -l) files, $(wc -l < "$RUNNER_TEMP/ext-before.txt") counted as already shared"
 
       - name: Run ${{ matrix.analyzer }} analyzer (${{ needs.plan.outputs.tag }})
         id: analyze
@@ -341,10 +342,12 @@ jobs:
         id: newext
         if: matrix.analyzer == 'online'
         run: |
-          (cd extensions-cache && find . -type f | sort) > "$RUNNER_TEMP/ext-after.txt"
-          comm -13 "$RUNNER_TEMP/ext-before.txt" "$RUNNER_TEMP/ext-after.txt" > "$RUNNER_TEMP/ext-new.txt"
+          (cd extensions-cache && find . -type f | LC_ALL=C sort) > "$RUNNER_TEMP/ext-after.txt"
+          LC_ALL=C comm -13 "$RUNNER_TEMP/ext-before.txt" "$RUNNER_TEMP/ext-after.txt" > "$RUNNER_TEMP/ext-new.txt"
           n="$(wc -l < "$RUNNER_TEMP/ext-new.txt")"
-          echo "New extension files: $n"
+          echo "Extension files: $(wc -l < "$RUNNER_TEMP/ext-before.txt") before, $(wc -l < "$RUNNER_TEMP/ext-after.txt") after, $n new"
+          echo "New extensions (top-level folders):"
+          cut -d/ -f2-3 "$RUNNER_TEMP/ext-new.txt" | sort | uniq -c | sort -rn | head -n 20 || true
           if [ "$n" -gt 0 ]; then
             tar -cf "$RUNNER_TEMP/ext-new.tar" -C extensions-cache -T "$RUNNER_TEMP/ext-new.txt"
             echo "Archive: $(du -h "$RUNNER_TEMP/ext-new.tar" | cut -f1)"
