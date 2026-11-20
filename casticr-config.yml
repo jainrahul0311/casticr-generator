@@ -1,0 +1,14 @@
+# Settings for .github/workflows/casticr-scan.yml
+# (the schedule time itself is the cron line in the workflow file)
+
+# What the scheduled run does. Manual runs choose these in the Run workflow form.
+schedule:
+  analyzer: offline   # offline | online | both
+  tag: dev            # image tag used for both analyzers: dev | int | latest | <version>
+  repos: ""           # comma-separated app names from repos.txt; blank = all
+
+online:
+  cloud_url: https://dev.castimaging.io
+
+artifacts:
+  retention_days: 3
