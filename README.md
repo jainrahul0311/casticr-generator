@@ -21,7 +21,7 @@ cancel the rest.
 
 | Analyzer  | Image | Needs |
 | --------- | ----- | ----- |
-| `offline` | `castimaging/imaging-docker-offline-analyzer:latest -n <app>` | nothing |
+| `offline` | `castimaging/imaging-docker-offline-analyzer:2.20.0 -n <app>` (pinned in `casticr-analyze.yml`; there is no `:latest` tag) | nothing |
 | `online`  | `castimaging/imaging-docker-analyzer:latest -ak <key> -n <app>` | `IMAGING_ANALYSIS_KEY` secret, `dev.castimaging.io` |
 
 ### When it runs

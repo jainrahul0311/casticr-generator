@@ -44,6 +44,9 @@ jobs:
       matrix:
         analyzer: ${{ fromJSON(inputs.analyzers) }}
     env:
+      # Docker Hub has no :latest tag for the offline analyzer; pin a release.
+      # Tags: https://hub.docker.com/r/castimaging/imaging-docker-offline-analyzer/tags
+      OFFLINE_IMAGE: castimaging/imaging-docker-offline-analyzer:2.20.0
       APP: ${{ inputs.app_name }}
       REPO_URL: ${{ inputs.repo_url }}
     steps:
@@ -51,23 +54,6 @@ jobs:
         run: |
           git clone --depth 1 "$REPO_URL" source
 
-      - name: Prepare output folders
-        run: |
-          mkdir -p results extensions-cache
-          # The analyzer runs as user 'carl' in the container and must write to the mounts.
-          chmod 777 results extensions-cache
-
-      # ---------------------------------------------------------------- offline
-      - name: Run CAST Imaging offline analyzer
-        if: matrix.analyzer == 'offline'
-        run: |
-          docker run --rm \
-            -v "${PWD}/source:/home/carl/extras/source" \
-            -v "${PWD}/results:/home/carl/extras/results" \
-            castimaging/imaging-docker-offline-analyzer:latest \
-            -n "$APP"
-
-      # ----------------------------------------------------------------- online
       # Persist the online analyzer's downloaded extensions so they're reused on
       # later runs. One cache per app. To force a fresh download, bump "v1".
       - name: Restore extensions cache
@@ -77,6 +63,25 @@ jobs:
           path: extensions-cache
           key: casticr-extensions-v1-${{ inputs.app_name }}
 
+      # Restore BEFORE fixing permissions: the cache restore resets the folder's
+      # mode, which made the online analyzer fail with "no write access".
+      - name: Prepare output folders
+        run: |
+          mkdir -p results extensions-cache
+          # The analyzer runs as user 'carl' in the container and must write to the mounts.
+          sudo chmod -R a+rwX results extensions-cache
+
+      # ---------------------------------------------------------------- offline
+      - name: Run CAST Imaging offline analyzer
+        if: matrix.analyzer == 'offline'
+        run: |
+          docker run --rm \
+            -v "${PWD}/source:/home/carl/extras/source" \
+            -v "${PWD}/results:/home/carl/extras/results" \
+            "$OFFLINE_IMAGE" \
+            -n "$APP"
+
+      # ----------------------------------------------------------------- online
       - name: Run CAST Imaging online analyzer
         if: matrix.analyzer == 'online'
         env:
