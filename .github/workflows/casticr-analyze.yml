@@ -1,0 +1,124 @@
+# =============================================================================
+#  Analyze one project (reusable workflow, called by casticr-scan.yml)
+# =============================================================================
+#  Runs one job per requested analyzer, in parallel:
+#    1. clone the repo (shallow)
+#    2. run the offline or online CAST Imaging docker analyzer
+#    3. find the generated <app>.casticr
+#    4. upload it as an artifact:
+#         offline -> <app>.casticr
+#         online  -> <app>-online.casticr
+# =============================================================================
+
+name: Analyze one project
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: 'App name passed to the analyzer -n flag'
+        type: string
+        required: true
+      repo_url:
+        description: 'Public clone URL'
+        type: string
+        required: true
+      analyzers:
+        description: 'JSON array of analyzers, e.g. ["offline","online"]'
+        type: string
+        required: true
+    secrets:
+      IMAGING_ANALYSIS_KEY:
+        description: 'Analysis key for the online analyzer (-ak)'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: ${{ matrix.analyzer }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # offline failing must NOT cancel online, and vice versa
+      matrix:
+        analyzer: ${{ fromJSON(inputs.analyzers) }}
+    env:
+      APP: ${{ inputs.app_name }}
+      REPO_URL: ${{ inputs.repo_url }}
+    steps:
+      - name: Clone ${{ inputs.app_name }}
+        run: |
+          git clone --depth 1 "$REPO_URL" source
+
+      - name: Prepare output folders
+        run: |
+          mkdir -p results extensions-cache
+          # The analyzer runs as user 'carl' in the container and must write to the mounts.
+          chmod 777 results extensions-cache
+
+      # ---------------------------------------------------------------- offline
+      - name: Run CAST Imaging offline analyzer
+        if: matrix.analyzer == 'offline'
+        run: |
+          docker run --rm \
+            -v "${PWD}/source:/home/carl/extras/source" \
+            -v "${PWD}/results:/home/carl/extras/results" \
+            castimaging/imaging-docker-offline-analyzer:latest \
+            -n "$APP"
+
+      # ----------------------------------------------------------------- online
+      # Persist the online analyzer's downloaded extensions so they're reused on
+      # later runs. One cache per app. To force a fresh download, bump "v1".
+      - name: Restore extensions cache
+        if: matrix.analyzer == 'online'
+        uses: actions/cache@v6
+        with:
+          path: extensions-cache
+          key: casticr-extensions-v1-${{ inputs.app_name }}
+
+      - name: Run CAST Imaging online analyzer
+        if: matrix.analyzer == 'online'
+        env:
+          ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
+        run: |
+          if [ -z "$ANALYSIS_KEY" ]; then
+            echo "::error::IMAGING_ANALYSIS_KEY secret is not set; the online analyzer needs it."
+            exit 1
+          fi
+          docker run --rm \
+            -v "${PWD}/source:/home/carl/extras/source" \
+            -v "${PWD}/results:/home/carl/extras/results" \
+            -v "${PWD}/extensions-cache:/home/carl/extras/extensions" \
+            -e IMAGING_CLOUD_URL="https://dev.castimaging.io" \
+            castimaging/imaging-docker-analyzer:latest \
+            -ak "$ANALYSIS_KEY" \
+            -n "$APP"
+
+      # ----------------------------------------------------------------- common
+      - name: Locate the .casticr file
+        run: |
+          # The container wrote as a different user; take ownership so we (and the
+          # cache save step) can read results and the extensions cache.
+          sudo chown -R "$(id -u):$(id -g)" results extensions-cache || true
+          # Usual layout: results/<app>/<timestamp>/deep-analysis/<app>.casticr
+          # Search all of results/ (newest wins) in case the layout differs.
+          casticr="$(find results -type f -name '*.casticr' -printf '%T@ %p\n' 2>/dev/null \
+                     | sort -nr | head -n1 | cut -d' ' -f2-)"
+          if [ -z "$casticr" ]; then
+            echo "::error::No .casticr found under results/ — did the analysis succeed?"
+            echo "results tree:"; find results -maxdepth 4 2>/dev/null | sed 's/^/  /' || true
+            exit 1
+          fi
+          echo "Found: $casticr ($(du -h "$casticr" | cut -f1))"
+          echo "CASTICR_PATH=$casticr" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          # offline -> <app>.casticr, online -> <app>-online.casticr
+          name: ${{ inputs.app_name }}${{ matrix.analyzer == 'online' && '-online' || '' }}.casticr
+          path: ${{ env.CASTICR_PATH }}
+          overwrite: true
+          retention-days: 3
+          if-no-files-found: error

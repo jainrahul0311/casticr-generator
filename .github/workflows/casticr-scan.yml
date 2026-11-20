@@ -1,22 +1,26 @@
 # =============================================================================
-#  Scheduled .casticr scan
+#  .casticr scan
 # =============================================================================
-#  For every project in the matrix below, in its OWN parallel job:
-#    1. clone the repo (shallow)
-#    2. restore this app's cached analyzer extensions (reused across runs)
-#    3. run the CAST Imaging docker analyzer on it
-#    4. find the generated <app>.casticr
-#    5. upload it as a build artifact named after the app
+#  Two analyzers:
+#    offline : castimaging/imaging-docker-offline-analyzer  (no key, no cloud)
+#    online  : castimaging/imaging-docker-analyzer          (-ak key + cloud URL)
 #
-#  Runs at 9 PM IST (= 15:30 UTC), Monday-Friday, and can be started manually.
+#  Scheduled run (14:30 UTC = 8 PM IST, Mon-Fri): OFFLINE analyzer, ALL projects.
+#
+#  Manual run (Actions tab -> Run workflow):
+#    analyzer : online (default) | offline | both
+#    project  : one project name from the PROJECTS list below, or blank for all
+#
+#  Each project shows up as its own box in the run graph, with one job per
+#  analyzer inside it. The per-project work lives in casticr-analyze.yml.
 #
 #  ---------------------------------------------------------------------------
-#  TO ADD / REMOVE A PROJECT: edit the matrix `include:` list below.
+#  TO ADD / REMOVE A PROJECT: edit the PROJECTS list below. Nothing else.
+#    - name: the app name passed to the analyzer's -n flag (also the artifact
+#            name, and what you type in the manual run's `project` box)
 #    - url : the repo's public clone URL
-#    - name: the app name passed to the analyzer's -n flag (also the folder
-#            the analyzer creates in results, and the artifact name)
 #
-#  REQUIRED SECRET: IMAGING_ANALYSIS_KEY   (passed to the analyzer's -ak flag)
+#  REQUIRED SECRET (online analyzer only): IMAGING_ANALYSIS_KEY
 #  ---------------------------------------------------------------------------
 # =============================================================================
 
@@ -24,8 +28,19 @@ name: Scheduled .casticr scan
 
 on:
   schedule:
-    - cron: '30 14 * * 1-5'   # 15:30 UTC == 21:00 (9 PM) IST, Mon-Fri
-  workflow_dispatch: {}     # allow manual runs from the Actions tab
+    - cron: '30 14 * * 1-5'   # 14:30 UTC == 20:00 (8 PM) IST, Mon-Fri
+  workflow_dispatch:
+    inputs:
+      analyzer:
+        description: 'Analyzer to run'
+        type: choice
+        options: [online, offline, both]
+        default: online
+      project:
+        description: 'Project name from the PROJECTS list (blank = all)'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -34,95 +49,99 @@ concurrency:
   group: casticr-scan
   cancel-in-progress: false
 
+env:
+  # ===== EDIT THIS LIST (name = -n app name, url = public clone URL) ========
+  PROJECTS: |
+    - name: aws-mainframe-mainframe
+      url: https://github.com/aws-samples/aws-mainframe-modernization-carddemo
+    - name: razorpay-dotnet
+      url: https://github.com/razorpay/razorpay-dotnet-testapp.git
+    - name: spring-petclinic-microservices-jee
+      url: https://github.com/spring-petclinic/spring-petclinic-microservices
+    - name: eshop-csharp-dotnet
+      url: https://github.com/dotnet-architecture/eShopModernizing
+    - name: guava-jee
+      url: https://github.com/google/guava.git
+    - name: strix-python
+      url: https://github.com/usestrix/strix.git
+    - name: nopCommerce
+      url: https://github.com/nopSolutions/nopCommerce
+  # ==========================================================================
+
 jobs:
-  scan:
-    name: scan ${{ matrix.name }}
+  plan:
+    name: plan
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false          # one project failing must NOT cancel the others
-      # max-parallel: 5         # uncomment to cap how many scans run at once
-      matrix:
-        include:
-          # ===== EDIT THIS LIST (url = public clone URL, name = -n app name) ===
-          - name: aws-mainframe-mainframe
-            url: https://github.com/aws-samples/aws-mainframe-modernization-carddemo
-          - name: razorpay-dotnet
-            url: https://github.com/razorpay/razorpay-dotnet-testapp.git
-          - name: spring-petclinic-microservices-jee
-            url: https://github.com/spring-petclinic/spring-petclinic-microservices
-          - name: eshop-csharp-dotnet
-            url: https://github.com/dotnet-architecture/eShopModernizing
-          - name: guava-jee
-            url: https://github.com/google/guava.git
-          - name: strix-python
-            url: https://github.com/usestrix/strix.git
-          - name: nopCommerce
-            url: https://github.com/nopSolutions/nopCommerce
-          # ====================================================================
-
+    outputs:
+      projects: ${{ steps.plan.outputs.projects }}
+      analyzers: ${{ steps.plan.outputs.analyzers }}
     steps:
-      - name: Clone ${{ matrix.name }}
+      - name: Pick projects and analyzers
+        id: plan
         env:
-          REPO_URL: ${{ matrix.url }}
+          EVENT: ${{ github.event_name }}
+          ANALYZER: ${{ inputs.analyzer }}
+          PROJECT: ${{ inputs.project }}
         run: |
-          git clone --depth 1 "$REPO_URL" source
+          set -euo pipefail
 
-      # Persist the analyzer's downloaded extensions (/home/carl/extras/extensions)
-      # so they're reused on later runs instead of re-downloaded every day.
-      # One cache per app (extensions are technology-specific). To force a fresh
-      # download, bump the "v1" in the key.
-      - name: Restore extensions cache
-        uses: actions/cache@v6
-        with:
-          path: extensions-cache
-          key: casticr-extensions-v1-${{ matrix.name }}
-
-      - name: Run CAST Imaging analyzer
-        env:
-          ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
-          APP: ${{ matrix.name }}
-        run: |
-          mkdir -p results extensions-cache
-          # The analyzer runs as user 'carl' in the container and must write to both mounts.
-          chmod 777 results extensions-cache
-          # Mirrors your local command, plus the shared extensions mount:
-          #   docker run -v <src>:/home/carl/extras/source \
-          #              -v <out>:/home/carl/extras/results \
-          #              -v <cache>:/home/carl/extras/extensions \
-          #              castimaging/imaging-docker-analyzer:latest -ak <key> -n <app>
-          docker run --rm \
-            -v "${PWD}/source:/home/carl/extras/source" \
-            -v "${PWD}/results:/home/carl/extras/results" \
-            -v "${PWD}/extensions-cache:/home/carl/extras/extensions" \
-            -e IMAGING_CLOUD_URL="https://dev.castimaging.io" \
-            castimaging/imaging-docker-analyzer:latest \
-            -ak "$ANALYSIS_KEY" \
-            -n "$APP"
-
-      - name: Locate the .casticr file
-        env:
-          APP: ${{ matrix.name }}
-        run: |
-          # The container wrote as a different user; take ownership so we (and the
-          # cache save step) can read results and the extensions cache.
-          sudo chown -R "$(id -u):$(id -g)" results extensions-cache || true
-          # Layout: results/<app>/<timestamp>/deep-analysis/<app>.casticr
-          # The timestamp folder is dynamic, so find it (newest wins if several).
-          casticr="$(find "results/$APP" -type f -name '*.casticr' -printf '%T@ %p\n' 2>/dev/null \
-                     | sort -nr | head -n1 | cut -d' ' -f2-)"
-          if [ -z "$casticr" ]; then
-            echo "::error::No .casticr found under results/$APP — did the analysis succeed?"
-            echo "results tree:"; find results -maxdepth 4 2>/dev/null | sed 's/^/  /' || true
+          # PROJECTS (YAML) -> compact JSON array of {name, url}
+          all="$(printf '%s\n' "$PROJECTS" | yq -o=json -I=0 '.')"
+          bad="$(jq -r '[.[] | select((.name // "") == "" or (.url // "") == "")] | length' <<<"$all")"
+          if [ "$bad" != "0" ]; then
+            echo "::error::Every PROJECTS entry needs both a name and a url."
             exit 1
           fi
-          echo "Found: $casticr ($(du -h "$casticr" | cut -f1))"
-          echo "CASTICR_PATH=$casticr" >> "$GITHUB_ENV"
+          dupes="$(jq -r '[.[].name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' <<<"$all")"
+          if [ -n "$dupes" ]; then
+            echo "::error::Duplicate project names in PROJECTS: $dupes"
+            exit 1
+          fi
 
-      - name: Upload ${{ matrix.name }}.casticr
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.name }}.casticr   # stable name -> same artifact name every day
-          path: ${{ env.CASTICR_PATH }}      # upload the raw .casticr file directly
-          overwrite: true
-          retention-days: 3
-          if-no-files-found: error
+          # Analyzers: the schedule always runs offline only.
+          if [ "$EVENT" = "schedule" ]; then
+            ANALYZER=offline
+            PROJECT=""
+          fi
+          case "${ANALYZER:-offline}" in
+            offline) analyzers='["offline"]' ;;
+            online)  analyzers='["online"]' ;;
+            both)    analyzers='["offline","online"]' ;;
+            *) echo "::error::Unknown analyzer '$ANALYZER'"; exit 1 ;;
+          esac
+
+          # Projects: blank = all, otherwise exactly one matching name.
+          PROJECT="$(printf '%s' "$PROJECT" | xargs)"   # trim spaces
+          if [ -z "$PROJECT" ]; then
+            projects="$all"
+          else
+            projects="$(jq -c --arg p "$PROJECT" '[.[] | select(.name == $p)]' <<<"$all")"
+            if [ "$projects" = "[]" ]; then
+              echo "::error::No project named '$PROJECT'. Valid names: $(jq -r '[.[].name] | join(", ")' <<<"$all")"
+              exit 1
+            fi
+          fi
+
+          echo "projects=$projects"   >> "$GITHUB_OUTPUT"
+          echo "analyzers=$analyzers" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Plan"
+            echo "- Analyzer(s): \`$analyzers\`"
+            echo "- Projects: $(jq -r '[.[].name] | join(", ")' <<<"$projects")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    name: ${{ matrix.project.name }}
+    needs: plan
+    strategy:
+      fail-fast: false          # one project failing must NOT cancel the others
+      # max-parallel: 5         # uncomment to cap how many projects run at once
+      matrix:
+        project: ${{ fromJSON(needs.plan.outputs.projects) }}
+    uses: ./.github/workflows/casticr-analyze.yml
+    with:
+      app_name: ${{ matrix.project.name }}
+      repo_url: ${{ matrix.project.url }}
+      analyzers: ${{ needs.plan.outputs.analyzers }}
+    secrets:
+      IMAGING_ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
