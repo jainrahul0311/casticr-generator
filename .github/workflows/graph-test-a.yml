@@ -1,0 +1,34 @@
+# TEMPORARY: checks how the Actions run graph draws layout A
+# (matrix over repos -> reusable workflow -> matrix over analyzers).
+# Dummy sleep jobs only; no scans. Delete after the check.
+name: graph-test A (layout check)
+
+on:
+  push:
+    branches: [pipeline-v2]
+    paths: ['.github/workflows/graph-test-*.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo planned
+  scan:
+    name: ${{ matrix.repo }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [nopCommerce, guava-jee, strix-python]
+    uses: ./.github/workflows/graph-test-a-inner.yml
+    with:
+      repo: ${{ matrix.repo }}
+  merge-cache:
+    needs: scan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo merged
