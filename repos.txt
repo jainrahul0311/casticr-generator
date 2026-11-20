@@ -1,0 +1,16 @@
+# Repositories scanned by .github/workflows/casticr-scan.yml
+#
+# One repo per line:   <clone URL> [app name]
+#   - app name is optional; if left out it's taken from the URL
+#     (https://github.com/nopSolutions/nopCommerce -> nopCommerce)
+#   - the app name is passed to the analyzer's -n flag and names the artifact
+#   - allowed characters in app names: letters, digits, . _ -
+#   - blank lines and anything after # are ignored
+
+https://github.com/aws-samples/aws-mainframe-modernization-carddemo   aws-mainframe-mainframe
+https://github.com/razorpay/razorpay-dotnet-testapp.git               razorpay-dotnet
+https://github.com/spring-petclinic/spring-petclinic-microservices    spring-petclinic-microservices-jee
+https://github.com/dotnet-architecture/eShopModernizing               eshop-csharp-dotnet
+https://github.com/google/guava.git                                   guava-jee
+https://github.com/usestrix/strix.git                                 strix-python
+https://github.com/nopSolutions/nopCommerce

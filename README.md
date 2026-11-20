@@ -1,45 +1,53 @@
 # casticr-generator
 
-Generates a `.casticr` file for a set of demo applications using CAST Imaging,
-and stores each one as a GitHub Actions artifact.
+Generates `.casticr` files for a set of applications using CAST Imaging and
+stores each one as a GitHub Actions artifact.
 
-## How it works
+## Files you edit
 
-Two workflows:
+| File | What it controls |
+| ---- | ---------------- |
+| [`repos.txt`](repos.txt) | Which repositories to scan: one `<clone URL> [app name]` per line. The name is optional and is taken from the URL if left out. |
+| [`casticr-config.yml`](casticr-config.yml) | What the scheduled run does (analyzer, image tag, repos), the per-analyzer time limit, the online cloud URL, and artifact retention. |
+| [`casticr-scan.yml`](.github/workflows/casticr-scan.yml) | Only the schedule time (cron line). |
 
-- [`casticr-scan.yml`](.github/workflows/casticr-scan.yml) holds the triggers,
-  the project list and a `plan` job that decides what to run.
-- [`casticr-analyze.yml`](.github/workflows/casticr-analyze.yml) is a reusable
-  workflow that analyzes one project: one job per analyzer, each of which
-  clones the repo, runs the analyzer, finds the `.casticr` and uploads it.
+## Analyzers
 
-In the run graph each project gets its own box, with its `offline` and/or
-`online` job inside. `fail-fast: false` everywhere, so one failure does not
-cancel the rest.
-
-### Analyzers
+Both use the same image tag (`dev` by default):
 
 | Analyzer  | Image | Needs |
 | --------- | ----- | ----- |
-| `offline` | `castimaging/imaging-docker-offline-analyzer:<tag> -n <app>` (tag `dev` by default) | nothing |
-| `online`  | `castimaging/imaging-docker-analyzer:latest -ak <key> -n <app>` | `IMAGING_ANALYSIS_KEY` secret, `dev.castimaging.io` |
+| `offline` | `castimaging/imaging-docker-offline-analyzer:<tag>` | nothing |
+| `online`  | `castimaging/imaging-docker-analyzer:<tag>` | `IMAGING_ANALYSIS_KEY` secret |
 
-### When it runs
+## Running
 
-| Trigger | Analyzer | Projects |
-| ------- | -------- | -------- |
-| Schedule: 8 PM IST (14:30 UTC), Mon–Fri | `offline`, tag `dev` | all |
-| Manual: Actions → **Scheduled .casticr scan** → Run workflow | `online` (default), `offline` or `both`; offline tag `dev` (default), `int` or `latest` | the name typed in `project`, or all if blank |
+- **Scheduled:** 8 PM IST (14:30 UTC), Mon–Fri, using `casticr-config.yml` → `schedule`
+  (today: offline, tag `dev`, all repos).
+- **Manual:** Actions → **Scheduled .casticr scan** → Run workflow:
+  - `analyzer`: `online` (default), `offline` or `both`
+  - `repos`: comma-separated app names or URLs; blank = all. A URL that isn't
+    in `repos.txt` is scanned ad hoc.
+  - `tag`: `dev` (default), `int` or `latest`
 
-A `project` name that isn't in the list fails the `plan` job immediately and
-prints the valid names.
+## How a run works
 
-## Projects scanned
+1. **plan** reads `repos.txt`, `casticr-config.yml` and the form, and builds
+   the job list. Unknown repo names fail here, with the valid names listed.
+2. **scan**: one job per repo × analyzer, all in parallel, named
+   `<app> / offline` and `<app> / online`. Each clones the repo, runs the
+   analyzer and uploads the result. One failure doesn't stop the others.
+3. **merge extensions cache** (only when online ran). All online scans read
+   one shared extensions cache. Each hands back only the extensions it newly
+   downloaded, and this job merges them and saves the next version of the
+   shared cache (older versions are deleted). The first online run starts with an empty cache.
 
-Edit the `PROJECTS` list at the top of
-[`casticr-scan.yml`](.github/workflows/casticr-scan.yml). Each entry is a
-`name` (the `-n` app name, the artifact name, and what you type in `project`)
-and a `url` (public clone URL). Nothing else needs changing.
+## Results
+
+Download from the run's **Artifacts**:
+
+- offline: `<app>.casticr`
+- online: `<app>-online.casticr`
 
 ## Required secret
 
@@ -48,12 +56,3 @@ Only the online analyzer needs it:
 ```bash
 gh secret set IMAGING_ANALYSIS_KEY --repo <owner>/casticr-generator
 ```
-
-## Getting the results
-
-Open the run under the **Actions** tab and download the artifacts:
-
-- offline: `<app>.casticr`
-- online: `<app>-online.casticr`
-
-They use stable names and 3-day retention, so each run refreshes them.

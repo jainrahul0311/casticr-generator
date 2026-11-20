@@ -1,28 +1,31 @@
 # =============================================================================
 #  .casticr scan
 # =============================================================================
-#  Two analyzers:
-#    offline : castimaging/imaging-docker-offline-analyzer  (no key, no cloud)
-#    online  : castimaging/imaging-docker-analyzer          (-ak key + cloud URL)
+#  Inputs live in two files at the repo root:
+#    repos.txt          which repositories to scan (one URL per line)
+#    casticr-config.yml what the scheduled run does, plus shared settings
 #
-#  Scheduled run (14:30 UTC = 8 PM IST, Mon-Fri): OFFLINE analyzer, ALL projects.
+#  Analyzers (same image tag for both):
+#    offline : castimaging/imaging-docker-offline-analyzer:<tag>   (no key)
+#    online  : castimaging/imaging-docker-analyzer:<tag>           (-ak key)
+#
+#  Scheduled run (14:30 UTC = 8 PM IST, Mon-Fri): settings from
+#  casticr-config.yml -> schedule (today: offline, tag dev, all repos).
 #
 #  Manual run (Actions tab -> Run workflow):
 #    analyzer : online (default) | offline | both
-#    project  : one project name from the PROJECTS list below, or blank for all
-#    offline_tag : offline analyzer image tag: dev (default) | int | latest
+#    repos    : comma-separated app names or URLs (blank = all in repos.txt);
+#               a URL not in repos.txt is scanned ad hoc
+#    tag      : dev (default) | int | latest
 #
-#  Each project shows up as its own box in the run graph, with one job per
-#  analyzer inside it. The per-project work lives in casticr-analyze.yml.
-#
-#  ---------------------------------------------------------------------------
-#  TO ADD / REMOVE A PROJECT: edit the PROJECTS list below. Nothing else.
-#    - name: the app name passed to the analyzer's -n flag (also the artifact
-#            name, and what you type in the manual run's `project` box)
-#    - url : the repo's public clone URL
+#  Jobs:
+#    plan         reads the files + inputs, builds the job list
+#    scan         one job per repo x analyzer, all in parallel, named
+#                 "<app> / offline" and "<app> / online"
+#    merge-cache  (only when online ran) merges the extensions each online
+#                 scan downloaded into ONE shared cache for the next run
 #
 #  REQUIRED SECRET (online analyzer only): IMAGING_ANALYSIS_KEY
-#  ---------------------------------------------------------------------------
 # =============================================================================
 
 name: Scheduled .casticr scan
@@ -37,13 +40,13 @@ on:
         type: choice
         options: [online, offline, both]
         default: online
-      project:
-        description: 'Project name from the PROJECTS list (blank = all)'
+      repos:
+        description: 'Comma-separated app names or URLs (blank = all in repos.txt)'
         type: string
         required: false
         default: ''
-      offline_tag:
-        description: 'Offline analyzer image tag (castimaging/imaging-docker-offline-analyzer)'
+      tag:
+        description: 'Image tag for both analyzers'
         type: choice
         options: [dev, int, latest]
         default: dev
@@ -56,105 +59,366 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # ===== EDIT THIS LIST (name = -n app name, url = public clone URL) ========
-  PROJECTS: |
-    - name: aws-mainframe-mainframe
-      url: https://github.com/aws-samples/aws-mainframe-modernization-carddemo
-    - name: razorpay-dotnet
-      url: https://github.com/razorpay/razorpay-dotnet-testapp.git
-    - name: spring-petclinic-microservices-jee
-      url: https://github.com/spring-petclinic/spring-petclinic-microservices
-    - name: eshop-csharp-dotnet
-      url: https://github.com/dotnet-architecture/eShopModernizing
-    - name: guava-jee
-      url: https://github.com/google/guava.git
-    - name: strix-python
-      url: https://github.com/usestrix/strix.git
-    - name: nopCommerce
-      url: https://github.com/nopSolutions/nopCommerce
-  # ==========================================================================
+  # Bump to start the shared extensions cache from scratch.
+  EXT_CACHE_PREFIX: casticr-ext-shared-v2-
 
 jobs:
+  # ---------------------------------------------------------------------------
   plan:
     name: plan
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      projects: ${{ steps.plan.outputs.projects }}
-      analyzers: ${{ steps.plan.outputs.analyzers }}
-      offline_tag: ${{ steps.plan.outputs.offline_tag }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_online: ${{ steps.plan.outputs.has_online }}
+      tag: ${{ steps.plan.outputs.tag }}
+      cloud_url: ${{ steps.plan.outputs.cloud_url }}
+      retention_days: ${{ steps.plan.outputs.retention_days }}
+      timeout: ${{ steps.plan.outputs.timeout }}
+      job_timeout: ${{ steps.plan.outputs.job_timeout }}
     steps:
-      - name: Pick projects and analyzers
+      - name: Get repos.txt and casticr-config.yml
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            repos.txt
+            casticr-config.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Build job list
         id: plan
         env:
           EVENT: ${{ github.event_name }}
-          ANALYZER: ${{ inputs.analyzer }}
-          PROJECT: ${{ inputs.project }}
-          OFFLINE_TAG: ${{ inputs.offline_tag }}
+          IN_ANALYZER: ${{ inputs.analyzer }}
+          IN_REPOS: ${{ inputs.repos }}
+          IN_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          cfg() { yq -r "$1" casticr-config.yml; }
 
-          # PROJECTS (YAML) -> compact JSON array of {name, url}
-          all="$(printf '%s\n' "$PROJECTS" | yq -o=json -I=0 '.')"
-          bad="$(jq -r '[.[] | select((.name // "") == "" or (.url // "") == "")] | length' <<<"$all")"
-          if [ "$bad" != "0" ]; then
-            echo "::error::Every PROJECTS entry needs both a name and a url."
-            exit 1
-          fi
-          dupes="$(jq -r '[.[].name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' <<<"$all")"
-          if [ -n "$dupes" ]; then
-            echo "::error::Duplicate project names in PROJECTS: $dupes"
-            exit 1
-          fi
-
-          # Analyzers: the schedule always runs offline only.
+          # ---- settings: schedule reads the config file, manual reads the form
           if [ "$EVENT" = "schedule" ]; then
-            ANALYZER=offline
-            PROJECT=""
-            OFFLINE_TAG=dev
+            ANALYZER="$(cfg '.schedule.analyzer // "offline"')"
+            TAG="$(cfg '.schedule.tag // "dev"')"
+            REPOS="$(cfg '.schedule.repos // ""')"
+          else
+            ANALYZER="${IN_ANALYZER:-online}"
+            TAG="${IN_TAG:-dev}"
+            REPOS="${IN_REPOS:-}"
           fi
-          OFFLINE_TAG="${OFFLINE_TAG:-dev}"
-          case "${ANALYZER:-offline}" in
+          CLOUD_URL="$(cfg '.online.cloud_url // "https://dev.castimaging.io"')"
+          RETENTION="$(cfg '.artifacts.retention_days // 3')"
+          TIMEOUT="$(cfg '.scan.timeout_minutes // 90')"
+          if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -lt 5 ] || [ "$TIMEOUT" -gt 350 ]; then
+            echo "::error file=casticr-config.yml::scan.timeout_minutes must be a number between 5 and 350"; exit 1
+          fi
+
+          case "$ANALYZER" in
             offline) analyzers='["offline"]' ;;
             online)  analyzers='["online"]' ;;
             both)    analyzers='["offline","online"]' ;;
-            *) echo "::error::Unknown analyzer '$ANALYZER'"; exit 1 ;;
+            *) echo "::error::Unknown analyzer '$ANALYZER' (use offline, online or both)"; exit 1 ;;
           esac
+          if ! [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Invalid image tag '$TAG'"; exit 1
+          fi
 
-          # Projects: blank = all, otherwise exactly one matching name.
-          PROJECT="$(printf '%s' "$PROJECT" | xargs)"   # trim spaces
-          if [ -z "$PROJECT" ]; then
+          # ---- repos.txt -> [{name,url}]
+          name_from_url() { local n; n="$(basename "${1%/}")"; echo "${n%.git}"; }
+          norm_url() { local u="${1%/}"; echo "${u%.git}"; }
+          all='[]'
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%%#*}"
+            read -r url name _ <<<"$line" || true
+            [ -z "${url:-}" ] && continue
+            [ -z "${name:-}" ] && name="$(name_from_url "$url")"
+            if ! [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error file=repos.txt::Invalid app name '$name' (letters, digits, . _ - only)"; exit 1
+            fi
+            all="$(jq -c --arg n "$name" --arg u "$url" '. + [{name:$n, url:$u}]' <<<"$all")"
+          done < repos.txt
+          dupes="$(jq -r '[.[].name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' <<<"$all")"
+          if [ -n "$dupes" ]; then echo "::error file=repos.txt::Duplicate app names: $dupes"; exit 1; fi
+
+          # ---- pick repos: blank = all; else names or URLs, comma-separated
+          if [ -z "$(echo "$REPOS" | tr -d ' ,')" ]; then
             projects="$all"
           else
-            projects="$(jq -c --arg p "$PROJECT" '[.[] | select(.name == $p)]' <<<"$all")"
-            if [ "$projects" = "[]" ]; then
-              echo "::error::No project named '$PROJECT'. Valid names: $(jq -r '[.[].name] | join(", ")' <<<"$all")"
+            projects='[]'; unknown=()
+            IFS=',' read -ra tokens <<<"$REPOS"
+            for t in "${tokens[@]}"; do
+              t="$(echo "$t" | xargs)"; [ -z "$t" ] && continue
+              hit="$(jq -c --arg t "$t" --arg nt "$(norm_url "$t")" \
+                '[.[] | select(.name == $t or ((.url | rtrimstr("/") | rtrimstr(".git")) == $nt))] | first // empty' <<<"$all")"
+              if [ -z "$hit" ] && [[ "$t" =~ ^https?:// ]]; then
+                n="$(name_from_url "$t")"
+                hit="$(jq -nc --arg n "$n" --arg u "$t" '{name:$n, url:$u}')"
+                echo "::notice::$t is not in repos.txt; scanning it ad hoc as '$n'"
+              fi
+              if [ -z "$hit" ]; then unknown+=("$t"); continue; fi
+              projects="$(jq -c --argjson h "$hit" '. + [$h] | unique_by(.name)' <<<"$projects")"
+            done
+            if [ "${#unknown[@]}" -gt 0 ]; then
+              echo "::error::Unknown repo(s): ${unknown[*]}. Valid names: $(jq -r '[.[].name] | join(", ")' <<<"$all")"
               exit 1
             fi
           fi
 
-          echo "projects=$projects"   >> "$GITHUB_OUTPUT"
-          echo "analyzers=$analyzers" >> "$GITHUB_OUTPUT"
-          echo "offline_tag=$OFFLINE_TAG" >> "$GITHUB_OUTPUT"
+          # ---- job list = repos x analyzers, sorted so each repo's jobs sit together
+          matrix="$(jq -c --argjson a "$analyzers" '[.[] as $p | $a[] | $p + {analyzer: .}] | sort_by(.name, .analyzer)' <<<"$projects")"
+          count="$(jq length <<<"$matrix")"
+          if [ "$count" -eq 0 ]; then echo "::error::Nothing to scan"; exit 1; fi
+          if [ "$count" -gt 256 ]; then
+            echo "::error::$count jobs requested; GitHub allows at most 256 per run. Narrow 'repos' or run offline/online separately."
+            exit 1
+          fi
+
+          {
+            echo "matrix=$matrix"
+            echo "has_online=$(jq -r 'index("online") != null' <<<"$analyzers")"
+            echo "tag=$TAG"
+            echo "cloud_url=$CLOUD_URL"
+            echo "retention_days=$RETENTION"
+            echo "timeout=$TIMEOUT"
+            echo "job_timeout=$((TIMEOUT + 15))"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "### Plan"
-            echo "- Analyzer(s): \`$analyzers\`"
-            echo "- Offline image tag: \`$OFFLINE_TAG\`"
-            echo "- Projects: $(jq -r '[.[].name] | join(", ")' <<<"$projects")"
+            echo "| | |"; echo "|---|---|"
+            echo "| Trigger | \`$EVENT\` |"
+            echo "| Analyzer(s) | \`$analyzers\` |"
+            echo "| Image tag | \`$TAG\` |"
+            echo "| Jobs | $count |"
+            echo "| Repos | $(jq -r '[.[].name] | join(", ")' <<<"$projects") |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # ---------------------------------------------------------------------------
   scan:
-    name: ${{ matrix.project.name }}
+    name: ${{ matrix.name }} / ${{ matrix.analyzer }}
     needs: plan
+    runs-on: ubuntu-latest
+    # A stuck analyzer must not hold the queue (one run at a time) for GitHub's
+    # 6-hour default. Whole-job limit; the analyzer step gets most of it.
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.job_timeout) }}
     strategy:
-      fail-fast: false          # one project failing must NOT cancel the others
-      # max-parallel: 5         # uncomment to cap how many projects run at once
+      fail-fast: false          # one job failing must NOT cancel the others
+      # max-parallel: 10        # uncomment to cap how many scans run at once
       matrix:
-        project: ${{ fromJSON(needs.plan.outputs.projects) }}
-    uses: ./.github/workflows/casticr-analyze.yml
-    with:
-      app_name: ${{ matrix.project.name }}
-      repo_url: ${{ matrix.project.url }}
-      analyzers: ${{ needs.plan.outputs.analyzers }}
-      offline_tag: ${{ needs.plan.outputs.offline_tag }}
-    secrets:
-      IMAGING_ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      APP: ${{ matrix.name }}
+      REPO_URL: ${{ matrix.url }}
+      ANALYZER: ${{ matrix.analyzer }}
+      IMAGE: ${{ matrix.analyzer == 'online' && 'castimaging/imaging-docker-analyzer' || 'castimaging/imaging-docker-offline-analyzer' }}:${{ needs.plan.outputs.tag }}
+    steps:
+      - name: Clone ${{ matrix.name }}
+        run: git clone --depth 1 "$REPO_URL" source
+
+      # Online only: start from the newest shared extensions cache (none on the
+      # very first run; the analyzer then downloads what it needs).
+      - name: Restore shared extensions cache
+        id: ext
+        if: matrix.analyzer == 'online'
+        uses: actions/cache/restore@v6
+        with:
+          path: extensions-cache
+          key: ${{ env.EXT_CACHE_PREFIX }}${{ github.run_id }}
+          restore-keys: ${{ env.EXT_CACHE_PREFIX }}
+
+      - name: Prepare folders
+        env:
+          MATCHED_KEY: ${{ steps.ext.outputs.cache-matched-key }}
+        run: |
+          mkdir -p results extensions-cache
+          # The analyzer runs as user 'carl' in the container and must write to
+          # the mounts. Done after the cache restore, which resets permissions.
+          sudo chmod -R a+rwX results extensions-cache
+          # Remember which extension files came from the shared cache, so only
+          # newly downloaded ones are handed to merge-cache.
+          (cd extensions-cache && find . -type f | LC_ALL=C sort) > "$RUNNER_TEMP/ext-before.txt"
+          echo "Extensions cache: restored '${MATCHED_KEY:-nothing}', $(wc -l < "$RUNNER_TEMP/ext-before.txt") files"
+
+      - name: Run ${{ matrix.analyzer }} analyzer (${{ needs.plan.outputs.tag }})
+        id: analyze
+        timeout-minutes: ${{ fromJSON(needs.plan.outputs.timeout) }}
+        env:
+          ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
+          CLOUD_URL: ${{ needs.plan.outputs.cloud_url }}
+        run: |
+          set -o pipefail
+          echo "Image: $IMAGE"
+          # Copy the analyzer's output, with a UTC time on each line, to
+          # analyzer.log for the timing summary and the log artifact below.
+          stamp() { perl -MPOSIX -ne 'BEGIN { $| = 1 } print strftime("%H:%M:%S ", gmtime), $_' | tee "$RUNNER_TEMP/analyzer.log"; }
+          if [ "$ANALYZER" = "offline" ]; then
+            docker run --rm \
+              -v "${PWD}/source:/home/carl/extras/source" \
+              -v "${PWD}/results:/home/carl/extras/results" \
+              "$IMAGE" \
+              -n "$APP" 2>&1 | stamp
+          else
+            if [ -z "$ANALYSIS_KEY" ]; then
+              echo "::error::IMAGING_ANALYSIS_KEY secret is not set; the online analyzer needs it."
+              exit 1
+            fi
+            docker run --rm \
+              -v "${PWD}/source:/home/carl/extras/source" \
+              -v "${PWD}/results:/home/carl/extras/results" \
+              -v "${PWD}/extensions-cache:/home/carl/extras/extensions" \
+              -e IMAGING_CLOUD_URL="$CLOUD_URL" \
+              "$IMAGE" \
+              -ak "$ANALYSIS_KEY" \
+              -n "$APP" 2>&1 | stamp
+          fi
+
+      # Printed at the end of the job so it's easy to find, and on the run's
+      # Summary page: the longest silent stretches and the analyzer's own
+      # phase durations.
+      - name: Analyzer timing summary
+        if: always() && steps.analyze.outcome != 'skipped'
+        run: |
+          log="$RUNNER_TEMP/analyzer.log"
+          [ -s "$log" ] || { echo "No analyzer output captured."; exit 0; }
+          {
+            echo "### $APP / $ANALYZER — analyzer timing (UTC)"
+            echo '```'
+            echo "first line : $(head -n1 "$log" | cut -c1-150)"
+            echo "last line  : $(tail -n1 "$log" | cut -c1-150)"
+            echo "lines      : $(wc -l < "$log")"
+            echo
+            echo "Longest gaps between lines (seconds, then the line after the gap):"
+            awk '{ split($1, t, ":"); s = t[1]*3600 + t[2]*60 + t[3];
+                   if (NR > 1) { d = s - p; if (d < 0) d += 86400; if (d >= 20) printf "%5d s  %s\n", d, substr($0, 1, 140) }
+                   p = s }' "$log" | sort -rn | head -n 8
+            echo
+            echo "Extension downloads:"
+            grep -E 'will be downloaded' "$log" | cut -c1-200 | head -n 3 || echo "  (none)"
+            echo
+            echo "Phase durations reported by the analyzer:"
+            grep -E 'Duration *[:=]|successfully completed' "$log" | cut -c1-160 | tail -n 12
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload analyzer log
+        if: always() && steps.analyze.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: log-${{ matrix.name }}-${{ matrix.analyzer }}
+          path: ${{ runner.temp }}/analyzer.log
+          retention-days: ${{ fromJSON(needs.plan.outputs.retention_days) }}
+          if-no-files-found: ignore
+
+      - name: Locate the .casticr file
+        run: |
+          # The container wrote as a different user; take ownership.
+          sudo chown -R "$(id -u):$(id -g)" results extensions-cache || true
+          # Usual layout: results/<app>/<timestamp>/deep-analysis/<app>.casticr
+          casticr="$(find results -type f -name '*.casticr' -printf '%T@ %p\n' 2>/dev/null \
+                     | sort -nr | head -n1 | cut -d' ' -f2-)"
+          if [ -z "$casticr" ]; then
+            echo "::error::No .casticr found under results/ — did the analysis succeed?"
+            echo "results tree:"; find results -maxdepth 4 2>/dev/null | sed 's/^/  /' || true
+            exit 1
+          fi
+          echo "Found: $casticr ($(du -h "$casticr" | cut -f1))"
+          echo "CASTICR_PATH=$casticr" >> "$GITHUB_ENV"
+
+      - name: Upload .casticr
+        uses: actions/upload-artifact@v7
+        with:
+          # offline -> <app>.casticr, online -> <app>-online.casticr
+          name: ${{ matrix.name }}${{ matrix.analyzer == 'online' && '-online' || '' }}.casticr
+          path: ${{ env.CASTICR_PATH }}
+          overwrite: true
+          retention-days: ${{ fromJSON(needs.plan.outputs.retention_days) }}
+          if-no-files-found: error
+
+      # Online only: hand newly downloaded extensions to merge-cache.
+      - name: Collect new extensions
+        id: newext
+        if: matrix.analyzer == 'online'
+        run: |
+          (cd extensions-cache && find . -type f | LC_ALL=C sort) > "$RUNNER_TEMP/ext-after.txt"
+          LC_ALL=C comm -13 "$RUNNER_TEMP/ext-before.txt" "$RUNNER_TEMP/ext-after.txt" > "$RUNNER_TEMP/ext-new.txt"
+          n="$(wc -l < "$RUNNER_TEMP/ext-new.txt")"
+          echo "Extension files: $(wc -l < "$RUNNER_TEMP/ext-before.txt") before, $(wc -l < "$RUNNER_TEMP/ext-after.txt") after, $n new"
+          echo "New extensions (top-level folders):"
+          cut -d/ -f2-3 "$RUNNER_TEMP/ext-new.txt" | sort | uniq -c | sort -rn | head -n 20 || true
+          if [ "$n" -gt 0 ]; then
+            tar -cf "$RUNNER_TEMP/ext-new.tar" -C extensions-cache -T "$RUNNER_TEMP/ext-new.txt"
+            echo "Archive: $(du -h "$RUNNER_TEMP/ext-new.tar" | cut -f1)"
+            echo "has_new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload new extensions
+        if: steps.newext.outputs.has_new == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ext-new-${{ matrix.name }}
+          path: ${{ runner.temp }}/ext-new.tar
+          retention-days: 1
+          compression-level: 0     # tar of already-compressed jars; skip re-zipping
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Runs after all scans (even if some failed) when the online analyzer ran.
+  # Only this job writes the shared cache, so parallel scans never fight over it.
+  merge-cache:
+    name: merge extensions cache
+    needs: [plan, scan]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.has_online == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write            # to delete superseded cache entries
+    steps:
+      - name: Restore current shared cache
+        id: ext
+        uses: actions/cache/restore@v6
+        with:
+          path: extensions-cache
+          key: ${{ env.EXT_CACHE_PREFIX }}${{ github.run_id }}
+          restore-keys: ${{ env.EXT_CACHE_PREFIX }}
+
+      - name: Download new extensions from this run
+        uses: actions/download-artifact@v7
+        with:
+          pattern: ext-new-*
+          path: ext-new
+
+      - name: Merge
+        id: merge
+        run: |
+          mkdir -p extensions-cache
+          # One matching artifact lands directly in ext-new/, several land in
+          # ext-new/<artifact>/, so search recursively.
+          mapfile -t tars < <(find ext-new -type f -name '*.tar' 2>/dev/null | sort)
+          echo "Archives from this run: ${#tars[@]}"
+          for t in "${tars[@]}"; do
+            echo "  + $t"
+            tar -xf "$t" -C extensions-cache
+          done
+          echo "Shared cache size: $(du -sh extensions-cache | cut -f1)"
+          if [ "${#tars[@]}" -gt 0 ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save shared cache
+        if: steps.merge.outputs.changed == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: extensions-cache
+          key: ${{ env.EXT_CACHE_PREFIX }}${{ github.run_id }}
+
+      - name: Delete older shared cache entries
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KEEP: ${{ env.EXT_CACHE_PREFIX }}${{ github.run_id }}
+        run: |
+          gh cache list --key "$EXT_CACHE_PREFIX" --limit 100 --json id,key \
+            | jq -r --arg keep "$KEEP" '.[] | select(.key != $keep) | .id' \
+            | while read -r id; do
+                echo "Deleting cache $id"
+                gh cache delete "$id" || true
+              done
