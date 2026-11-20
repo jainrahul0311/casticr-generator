@@ -245,18 +245,23 @@ jobs:
           fi
 
       - name: Run ${{ matrix.analyzer }} analyzer (${{ needs.plan.outputs.tag }})
+        id: analyze
         timeout-minutes: ${{ fromJSON(needs.plan.outputs.timeout) }}
         env:
           ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
           CLOUD_URL: ${{ needs.plan.outputs.cloud_url }}
         run: |
+          set -o pipefail
           echo "Image: $IMAGE"
+          # Copy the analyzer's output, with a UTC time on each line, to
+          # analyzer.log for the timing summary and the log artifact below.
+          stamp() { perl -MPOSIX -ne 'BEGIN { $| = 1 } print strftime("%H:%M:%S ", gmtime), $_' | tee "$RUNNER_TEMP/analyzer.log"; }
           if [ "$ANALYZER" = "offline" ]; then
             docker run --rm \
               -v "${PWD}/source:/home/carl/extras/source" \
               -v "${PWD}/results:/home/carl/extras/results" \
               "$IMAGE" \
-              -n "$APP"
+              -n "$APP" 2>&1 | stamp
           else
             if [ -z "$ANALYSIS_KEY" ]; then
               echo "::error::IMAGING_ANALYSIS_KEY secret is not set; the online analyzer needs it."
@@ -269,8 +274,42 @@ jobs:
               -e IMAGING_CLOUD_URL="$CLOUD_URL" \
               "$IMAGE" \
               -ak "$ANALYSIS_KEY" \
-              -n "$APP"
+              -n "$APP" 2>&1 | stamp
           fi
+
+      # Printed at the end of the job so it's easy to find, and on the run's
+      # Summary page: the longest silent stretches and the analyzer's own
+      # phase durations.
+      - name: Analyzer timing summary
+        if: always() && steps.analyze.outcome != 'skipped'
+        run: |
+          log="$RUNNER_TEMP/analyzer.log"
+          [ -s "$log" ] || { echo "No analyzer output captured."; exit 0; }
+          {
+            echo "### $APP / $ANALYZER — analyzer timing (UTC)"
+            echo '```'
+            echo "first line : $(head -n1 "$log" | cut -c1-150)"
+            echo "last line  : $(tail -n1 "$log" | cut -c1-150)"
+            echo "lines      : $(wc -l < "$log")"
+            echo
+            echo "Longest gaps between lines (seconds, then the line after the gap):"
+            awk '{ split($1, t, ":"); s = t[1]*3600 + t[2]*60 + t[3];
+                   if (NR > 1) { d = s - p; if (d < 0) d += 86400; if (d >= 20) printf "%5d s  %s\n", d, substr($0, 1, 140) }
+                   p = s }' "$log" | sort -rn | head -n 8
+            echo
+            echo "Phase durations reported by the analyzer:"
+            grep -E 'Duration *[:=]|will be downloaded|successfully completed' "$log" | cut -c1-160 | tail -n 15
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload analyzer log
+        if: always() && steps.analyze.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: log-${{ matrix.name }}-${{ matrix.analyzer }}
+          path: ${{ runner.temp }}/analyzer.log
+          retention-days: ${{ fromJSON(needs.plan.outputs.retention_days) }}
+          if-no-files-found: ignore
 
       - name: Locate the .casticr file
         run: |
