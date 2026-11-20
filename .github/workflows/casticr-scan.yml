@@ -10,6 +10,7 @@
 #  Manual run (Actions tab -> Run workflow):
 #    analyzer : online (default) | offline | both
 #    project  : one project name from the PROJECTS list below, or blank for all
+#    offline_tag : offline analyzer image tag: dev (default) | int | latest
 #
 #  Each project shows up as its own box in the run graph, with one job per
 #  analyzer inside it. The per-project work lives in casticr-analyze.yml.
@@ -41,6 +42,11 @@ on:
         type: string
         required: false
         default: ''
+      offline_tag:
+        description: 'Offline analyzer image tag (castimaging/imaging-docker-offline-analyzer)'
+        type: choice
+        options: [dev, int, latest]
+        default: dev
 
 permissions:
   contents: read
@@ -75,6 +81,7 @@ jobs:
     outputs:
       projects: ${{ steps.plan.outputs.projects }}
       analyzers: ${{ steps.plan.outputs.analyzers }}
+      offline_tag: ${{ steps.plan.outputs.offline_tag }}
     steps:
       - name: Pick projects and analyzers
         id: plan
@@ -82,6 +89,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           ANALYZER: ${{ inputs.analyzer }}
           PROJECT: ${{ inputs.project }}
+          OFFLINE_TAG: ${{ inputs.offline_tag }}
         run: |
           set -euo pipefail
 
@@ -102,7 +110,9 @@ jobs:
           if [ "$EVENT" = "schedule" ]; then
             ANALYZER=offline
             PROJECT=""
+            OFFLINE_TAG=dev
           fi
+          OFFLINE_TAG="${OFFLINE_TAG:-dev}"
           case "${ANALYZER:-offline}" in
             offline) analyzers='["offline"]' ;;
             online)  analyzers='["online"]' ;;
@@ -124,9 +134,11 @@ jobs:
 
           echo "projects=$projects"   >> "$GITHUB_OUTPUT"
           echo "analyzers=$analyzers" >> "$GITHUB_OUTPUT"
+          echo "offline_tag=$OFFLINE_TAG" >> "$GITHUB_OUTPUT"
           {
             echo "### Plan"
             echo "- Analyzer(s): \`$analyzers\`"
+            echo "- Offline image tag: \`$OFFLINE_TAG\`"
             echo "- Projects: $(jq -r '[.[].name] | join(", ")' <<<"$projects")"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -143,5 +155,6 @@ jobs:
       app_name: ${{ matrix.project.name }}
       repo_url: ${{ matrix.project.url }}
       analyzers: ${{ needs.plan.outputs.analyzers }}
+      offline_tag: ${{ needs.plan.outputs.offline_tag }}
     secrets:
       IMAGING_ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}

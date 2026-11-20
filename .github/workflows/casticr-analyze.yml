@@ -27,6 +27,11 @@ on:
         description: 'JSON array of analyzers, e.g. ["offline","online"]'
         type: string
         required: true
+      offline_tag:
+        description: 'Tag of castimaging/imaging-docker-offline-analyzer (dev, int, latest, ...)'
+        type: string
+        required: false
+        default: dev
     secrets:
       IMAGING_ANALYSIS_KEY:
         description: 'Analysis key for the online analyzer (-ak)'
@@ -44,6 +49,9 @@ jobs:
       matrix:
         analyzer: ${{ fromJSON(inputs.analyzers) }}
     env:
+      # Tag comes from the caller: dev on schedule, dev/int/latest on manual runs.
+      # Tags: https://hub.docker.com/r/castimaging/imaging-docker-offline-analyzer/tags
+      OFFLINE_IMAGE: castimaging/imaging-docker-offline-analyzer:${{ inputs.offline_tag }}
       APP: ${{ inputs.app_name }}
       REPO_URL: ${{ inputs.repo_url }}
     steps:
@@ -51,23 +59,6 @@ jobs:
         run: |
           git clone --depth 1 "$REPO_URL" source
 
-      - name: Prepare output folders
-        run: |
-          mkdir -p results extensions-cache
-          # The analyzer runs as user 'carl' in the container and must write to the mounts.
-          chmod 777 results extensions-cache
-
-      # ---------------------------------------------------------------- offline
-      - name: Run CAST Imaging offline analyzer
-        if: matrix.analyzer == 'offline'
-        run: |
-          docker run --rm \
-            -v "${PWD}/source:/home/carl/extras/source" \
-            -v "${PWD}/results:/home/carl/extras/results" \
-            castimaging/imaging-docker-offline-analyzer:latest \
-            -n "$APP"
-
-      # ----------------------------------------------------------------- online
       # Persist the online analyzer's downloaded extensions so they're reused on
       # later runs. One cache per app. To force a fresh download, bump "v1".
       - name: Restore extensions cache
@@ -77,6 +68,25 @@ jobs:
           path: extensions-cache
           key: casticr-extensions-v1-${{ inputs.app_name }}
 
+      # Restore BEFORE fixing permissions: the cache restore resets the folder's
+      # mode, which made the online analyzer fail with "no write access".
+      - name: Prepare output folders
+        run: |
+          mkdir -p results extensions-cache
+          # The analyzer runs as user 'carl' in the container and must write to the mounts.
+          sudo chmod -R a+rwX results extensions-cache
+
+      # ---------------------------------------------------------------- offline
+      - name: Run CAST Imaging offline analyzer
+        if: matrix.analyzer == 'offline'
+        run: |
+          docker run --rm \
+            -v "${PWD}/source:/home/carl/extras/source" \
+            -v "${PWD}/results:/home/carl/extras/results" \
+            "$OFFLINE_IMAGE" \
+            -n "$APP"
+
+      # ----------------------------------------------------------------- online
       - name: Run CAST Imaging online analyzer
         if: matrix.analyzer == 'online'
         env:
