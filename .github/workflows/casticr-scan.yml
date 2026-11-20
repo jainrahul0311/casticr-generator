@@ -353,8 +353,9 @@ jobs:
         id: merge
         run: |
           mkdir -p extensions-cache
-          shopt -s nullglob
-          tars=(ext-new/*/*.tar)
+          # One matching artifact lands directly in ext-new/, several land in
+          # ext-new/<artifact>/, so search recursively.
+          mapfile -t tars < <(find ext-new -type f -name '*.tar' 2>/dev/null | sort)
           echo "Archives from this run: ${#tars[@]}"
           for t in "${tars[@]}"; do
             echo "  + $t"
