@@ -238,6 +238,24 @@ jobs:
           (cd extensions-cache && find . -type f | LC_ALL=C sort) > "$RUNNER_TEMP/ext-before.txt"
           echo "Extensions cache: restored '${MATCHED_KEY:-nothing}', $(wc -l < "$RUNNER_TEMP/ext-before.txt") files"
 
+      # Online only: time one known download from CAST Extend on this runner,
+      # so a slow scan can be told apart from a slow network. Never fails the
+      # job; skipped when the EXTEND_API_KEY secret isn't set.
+      - name: Time a CAST Extend download
+        if: matrix.analyzer == 'online'
+        continue-on-error: true
+        timeout-minutes: 12
+        env:
+          EXTEND_API_KEY: ${{ secrets.EXTEND_API_KEY }}
+          PACKAGE: com.castsoftware.dotnet/2.3.10-funcrel
+        run: |
+          [ -n "$EXTEND_API_KEY" ] || { echo "EXTEND_API_KEY not set; skipping."; exit 0; }
+          fmt='http=%{http_code} size=%{size_download}B speed=%{speed_download}B/s first_byte=%{time_starttransfer}s total=%{time_total}s'
+          dl="$(curl -L -s -o /dev/null --max-time 600 -H "x-nuget-apikey: $EXTEND_API_KEY" -w "$fmt" "https://extend.castsoftware.com/api/package/download/$PACKAGE" || true)"
+          mbps="$(echo "$dl" | sed -n 's/.*speed=\([0-9.]*\)B\/s.*/\1/p' | awk '{ printf "%.2f", $1 / 1048576 }')"
+          echo "### $APP / online — CAST Extend download test ($PACKAGE): ${mbps} MB/s" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "\`$dl\`" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Run ${{ matrix.analyzer }} analyzer (${{ needs.plan.outputs.tag }})
         id: analyze
         timeout-minutes: ${{ fromJSON(needs.plan.outputs.timeout) }}

@@ -10,6 +10,7 @@ stores each one as a GitHub Actions artifact.
 | [`repos.txt`](repos.txt) | Which repositories to scan: one `<clone URL> [app name]` per line. The name is optional and is taken from the URL if left out. |
 | [`casticr-config.yml`](casticr-config.yml) | What the scheduled run does (analyzer, image tag, repos), the per-analyzer time limit, the online cloud URL, and artifact retention. |
 | [`casticr-scan.yml`](.github/workflows/casticr-scan.yml) | Only the schedule time (cron line). |
+| [`extend-speed.yml`](.github/workflows/extend-speed.yml) | Manual test: times one extension download from CAST Extend on a runner (needs the `EXTEND_API_KEY` secret). |
 
 ## Analyzers
 

@@ -1,0 +1,58 @@
+# =============================================================================
+#  CAST Extend download speed test
+# =============================================================================
+#  Times one extension download from extend.castsoftware.com on a GitHub
+#  runner, the same way the online analyzer fetches extensions. Use it to tell
+#  whether slow online scans come from the network route or from CAST's side.
+#  Runs in about a minute and doesn't wait behind scans.
+#
+#  REQUIRED SECRET: EXTEND_API_KEY (CAST Extend API key)
+# =============================================================================
+
+name: CAST Extend speed test
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to download, as <id>/<version>'
+        type: string
+        default: com.castsoftware.dotnet/2.3.10-funcrel
+      max_minutes:
+        description: 'Give up after this many minutes'
+        type: string
+        default: '10'
+  push:
+    branches: [pipeline-v2]
+    paths: ['.github/workflows/extend-speed.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  speed:
+    name: download ${{ inputs.package || 'com.castsoftware.dotnet/2.3.10-funcrel' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Time the download
+        env:
+          EXTEND_API_KEY: ${{ secrets.EXTEND_API_KEY }}
+          PACKAGE: ${{ inputs.package || 'com.castsoftware.dotnet/2.3.10-funcrel' }}
+          MAX_MINUTES: ${{ inputs.max_minutes || '10' }}
+        run: |
+          if [ -z "$EXTEND_API_KEY" ]; then echo "::error::EXTEND_API_KEY secret is not set"; exit 1; fi
+          base=https://extend.castsoftware.com
+          fmt='http=%{http_code}  size=%{size_download}B  speed=%{speed_download}B/s  connect=%{time_connect}s  tls=%{time_appconnect}s  first_byte=%{time_starttransfer}s  total=%{time_total}s  ip=%{remote_ip}'
+          meta="$(curl -s -o /dev/null -m 30 -w "$fmt" "$base/api/package/$PACKAGE" || true)"
+          dl="$(curl -L -s -o /dev/null --max-time $((MAX_MINUTES * 60)) -H "x-nuget-apikey: $EXTEND_API_KEY" -w "$fmt" "$base/api/package/download/$PACKAGE" || true)"
+          mbps="$(echo "$dl" | sed -n 's/.*speed=\([0-9.]*\)B\/s.*/\1/p' | awk '{ printf "%.2f", $1 / 1048576 }')"
+          {
+            echo "### CAST Extend download from GitHub runner ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+            echo '```'
+            echo "package  : $PACKAGE"
+            echo "metadata : $meta"
+            echo "download : $dl"
+            echo "speed    : ${mbps} MB/s   (reference: 2.15 MB/s from a dev machine on 2026-11-20)"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
