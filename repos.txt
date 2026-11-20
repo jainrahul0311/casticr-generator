@@ -13,4 +13,4 @@ https://github.com/spring-petclinic/spring-petclinic-microservices    spring-pet
 https://github.com/dotnet-architecture/eShopModernizing               eshop-csharp-dotnet
 https://github.com/google/guava.git                                   guava-jee
 https://github.com/usestrix/strix.git                                 strix-python
-https://github.com/nopSolutions/nopCommerce
+https://github.com/nopSolutions/nopCommerce                           nopCommerce
