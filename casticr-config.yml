@@ -7,6 +7,9 @@ schedule:
   tag: dev            # image tag used for both analyzers: dev | int | latest | <version>
   repos: ""           # comma-separated app names from repos.txt; blank = all
 
+scan:
+  timeout_minutes: 90   # max minutes for one analyzer run before it's stopped (5-350)
+
 online:
   cloud_url: https://dev.castimaging.io
 

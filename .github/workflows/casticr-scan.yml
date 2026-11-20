@@ -67,12 +67,15 @@ jobs:
   plan:
     name: plan
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       has_online: ${{ steps.plan.outputs.has_online }}
       tag: ${{ steps.plan.outputs.tag }}
       cloud_url: ${{ steps.plan.outputs.cloud_url }}
       retention_days: ${{ steps.plan.outputs.retention_days }}
+      timeout: ${{ steps.plan.outputs.timeout }}
+      job_timeout: ${{ steps.plan.outputs.job_timeout }}
     steps:
       - name: Get repos.txt and casticr-config.yml
         uses: actions/checkout@v6
@@ -105,6 +108,10 @@ jobs:
           fi
           CLOUD_URL="$(cfg '.online.cloud_url // "https://dev.castimaging.io"')"
           RETENTION="$(cfg '.artifacts.retention_days // 3')"
+          TIMEOUT="$(cfg '.scan.timeout_minutes // 90')"
+          if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -lt 5 ] || [ "$TIMEOUT" -gt 350 ]; then
+            echo "::error file=casticr-config.yml::scan.timeout_minutes must be a number between 5 and 350"; exit 1
+          fi
 
           case "$ANALYZER" in
             offline) analyzers='["offline"]' ;;
@@ -172,6 +179,8 @@ jobs:
             echo "tag=$TAG"
             echo "cloud_url=$CLOUD_URL"
             echo "retention_days=$RETENTION"
+            echo "timeout=$TIMEOUT"
+            echo "job_timeout=$((TIMEOUT + 15))"
           } >> "$GITHUB_OUTPUT"
           {
             echo "### Plan"
@@ -188,6 +197,9 @@ jobs:
     name: ${{ matrix.name }} / ${{ matrix.analyzer }}
     needs: plan
     runs-on: ubuntu-latest
+    # A stuck analyzer must not hold the queue (one run at a time) for GitHub's
+    # 6-hour default. Whole-job limit; the analyzer step gets most of it.
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.job_timeout) }}
     strategy:
       fail-fast: false          # one job failing must NOT cancel the others
       # max-parallel: 10        # uncomment to cap how many scans run at once
@@ -233,6 +245,7 @@ jobs:
           fi
 
       - name: Run ${{ matrix.analyzer }} analyzer (${{ needs.plan.outputs.tag }})
+        timeout-minutes: ${{ fromJSON(needs.plan.outputs.timeout) }}
         env:
           ANALYSIS_KEY: ${{ secrets.IMAGING_ANALYSIS_KEY }}
           CLOUD_URL: ${{ needs.plan.outputs.cloud_url }}
@@ -317,6 +330,7 @@ jobs:
     needs: [plan, scan]
     if: always() && needs.plan.result == 'success' && needs.plan.outputs.has_online == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: write            # to delete superseded cache entries
