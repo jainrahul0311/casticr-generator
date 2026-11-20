@@ -60,7 +60,7 @@ concurrency:
 
 env:
   # Bump to start the shared extensions cache from scratch.
-  EXT_CACHE_PREFIX: casticr-ext-shared-v1-
+  EXT_CACHE_PREFIX: casticr-ext-shared-v2-
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -214,8 +214,8 @@ jobs:
       - name: Clone ${{ matrix.name }}
         run: git clone --depth 1 "$REPO_URL" source
 
-      # Online only: start from the shared extensions cache. On the very first
-      # run it falls back to this app's old per-app cache, if one exists.
+      # Online only: start from the newest shared extensions cache (none on the
+      # very first run; the analyzer then downloads what it needs).
       - name: Restore shared extensions cache
         id: ext
         if: matrix.analyzer == 'online'
@@ -223,9 +223,7 @@ jobs:
         with:
           path: extensions-cache
           key: ${{ env.EXT_CACHE_PREFIX }}${{ github.run_id }}
-          restore-keys: |
-            ${{ env.EXT_CACHE_PREFIX }}
-            casticr-extensions-v1-${{ matrix.name }}
+          restore-keys: ${{ env.EXT_CACHE_PREFIX }}
 
       - name: Prepare folders
         env:
@@ -236,14 +234,9 @@ jobs:
           # the mounts. Done after the cache restore, which resets permissions.
           sudo chmod -R a+rwX results extensions-cache
           # Remember which extension files came from the shared cache, so only
-          # newly downloaded ones are handed to merge-cache. Files restored from
-          # an old per-app cache count as new, so they seed the shared cache.
-          if [[ "$MATCHED_KEY" == "$EXT_CACHE_PREFIX"* ]]; then
-            (cd extensions-cache && find . -type f | LC_ALL=C sort) > "$RUNNER_TEMP/ext-before.txt"
-          else
-            : > "$RUNNER_TEMP/ext-before.txt"
-          fi
-          echo "Extensions cache: restored key '${MATCHED_KEY:-none}', $(find extensions-cache -type f | wc -l) files, $(wc -l < "$RUNNER_TEMP/ext-before.txt") counted as already shared"
+          # newly downloaded ones are handed to merge-cache.
+          (cd extensions-cache && find . -type f | LC_ALL=C sort) > "$RUNNER_TEMP/ext-before.txt"
+          echo "Extensions cache: restored '${MATCHED_KEY:-nothing}', $(wc -l < "$RUNNER_TEMP/ext-before.txt") files"
 
       - name: Run ${{ matrix.analyzer }} analyzer (${{ needs.plan.outputs.tag }})
         id: analyze
@@ -298,8 +291,11 @@ jobs:
                    if (NR > 1) { d = s - p; if (d < 0) d += 86400; if (d >= 20) printf "%5d s  %s\n", d, substr($0, 1, 140) }
                    p = s }' "$log" | sort -rn | head -n 8
             echo
+            echo "Extension downloads:"
+            grep -E 'will be downloaded' "$log" | cut -c1-200 | head -n 3 || echo "  (none)"
+            echo
             echo "Phase durations reported by the analyzer:"
-            grep -E 'Duration *[:=]|will be downloaded|successfully completed' "$log" | cut -c1-160 | tail -n 15
+            grep -E 'Duration *[:=]|successfully completed' "$log" | cut -c1-160 | tail -n 12
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 

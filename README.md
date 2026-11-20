@@ -40,7 +40,7 @@ Both use the same image tag (`dev` by default):
 3. **merge extensions cache** (only when online ran). All online scans read
    one shared extensions cache. Each hands back only the extensions it newly
    downloaded, and this job merges them and saves the next version of the
-   shared cache (older versions are deleted).
+   shared cache (older versions are deleted). The first online run starts with an empty cache.
 
 ## Results
 
